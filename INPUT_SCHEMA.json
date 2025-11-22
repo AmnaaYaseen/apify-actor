@@ -1,0 +1,71 @@
+{
+    "title": "Lead Scraper Configuration",
+    "description": "Extract business lead data including company info, decision makers, and contact details",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrls": {
+            "title": "Start URLs",
+            "type": "array",
+            "description": "List of company website URLs to scrape. You can also use URL lists from Google Sheets or text files.",
+            "prefill": [
+                { "url": "https://example-company1.com" },
+                { "url": "https://example-company2.com" }
+            ],
+            "editor": "requestListSources"
+        },
+        "maxResults": {
+            "title": "Maximum Results",
+            "type": "integer",
+            "description": "Maximum number of companies to scrape",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 1000
+        },
+        "targetIndustry": {
+            "title": "Target Industry (Optional)",
+            "type": "string",
+            "description": "Filter results by specific industry. Leave empty to scrape all industries.",
+            "editor": "select",
+            "enum": [
+                "",
+                "Technology",
+                "Healthcare",
+                "Finance",
+                "Real Estate",
+                "Retail",
+                "Restaurant",
+                "Legal",
+                "Education",
+                "Construction",
+                "Marketing",
+                "Other"
+            ],
+            "enumTitles": [
+                "All Industries",
+                "Technology",
+                "Healthcare",
+                "Finance",
+                "Real Estate",
+                "Retail",
+                "Restaurant",
+                "Legal",
+                "Education",
+                "Construction",
+                "Marketing",
+                "Other"
+            ],
+            "default": ""
+        },
+        "proxyConfiguration": {
+            "title": "Proxy Configuration",
+            "type": "object",
+            "description": "Proxy settings for scraping",
+            "editor": "proxy",
+            "default": {
+                "useApifyProxy": true
+            }
+        }
+    },
+    "required": ["startUrls"]
+}
