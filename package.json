@@ -1,8 +1,8 @@
 {
-    "name": "lead-scraper-actor",
-    "version": "1.0.0",
+    "name": "company-finder-actor",
+    "version": "2.0.0",
     "type": "module",
-    "description": "Apify actor for scraping business lead information from company websites",
+    "description": "Apify actor for finding companies by industry and location. Returns company names, domains, and locations.",
     "main": "main.js",
     "dependencies": {
       "apify": "^3.1.0",

@@ -1,9 +1,9 @@
 // ====================
-// MAIN.JS - Lead Scraper Actor
+// MAIN.JS - Company Finder Actor
 // ====================
 
 import { Actor } from 'apify';
-import { PuppeteerCrawler, Dataset } from 'crawlee';
+import { PuppeteerCrawler } from 'crawlee';
 
 // Initialize the Actor
 await Actor.init();
@@ -11,360 +11,313 @@ await Actor.init();
 // Get input from Apify platform
 const input = await Actor.getInput() || {};
 const {
-    startUrls = [],
-    maxResults = 50,
-    targetIndustry = null,
+    industry = 'Technology',
+    location = 'New York',
+    maxResults = 20,
     proxyConfiguration = { useApifyProxy: true }
 } = input;
 
-console.log('Starting Lead Scraper with input:', input);
+console.log(`Searching for ${industry} companies in ${location}...`);
 
-// Lead data schema
-const createLeadObject = () => ({
+// Ensure minimum 10 results
+const targetResults = Math.max(maxResults, 10);
+
+// Company data schema
+const createCompanyObject = () => ({
     companyName: null,
-    websiteUrl: null,
-    industry: null,
+    domain: null,
     location: null,
-    companySize: null,
-    companyType: null,
-    decisionMakerName: null,
-    decisionMakerRole: null,
-    email: null,
-    phone: null,
-    linkedIn: null,
-    facebook: null,
-    twitter: null,
-    instagram: null,
-    websiteQualityScore: null,
-    websiteQualityRating: null,
-    brandingNeeds: null,
-    leadScore: 0,
-    scrapedAt: new Date().toISOString(),
-    errors: []
+    industry: industry,
+    scrapedAt: new Date().toISOString()
 });
 
 // ====================
 // EXTRACTION FUNCTIONS
 // ====================
 
-async function extractCompanyName(page) {
+async function extractCompaniesFromGoogleMaps(page, searchQuery) {
     try {
-        return await page.evaluate(() => {
-            // Try meta tags first
-            const ogTitle = document.querySelector('meta[property="og:site_name"]');
-            if (ogTitle) return ogTitle.content;
-
-            // Try title tag
-            const title = document.title;
-            if (title) {
-                // Clean up common suffixes
-                return title.split('|')[0].split('-')[0].trim();
-            }
-
-            // Try logo alt text
-            const logo = document.querySelector('img[alt*="logo" i]');
-            if (logo) return logo.alt.replace(/logo/i, '').trim();
-
-            // Try h1
-            const h1 = document.querySelector('h1');
-            if (h1) return h1.textContent.trim();
-
-            return null;
-        });
-    } catch (error) {
-        console.error('Error extracting company name:', error.message);
-        return null;
-    }
-}
-
-async function extractEmail(page) {
-    try {
-        return await page.evaluate(() => {
-            const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
-            const bodyText = document.body.innerText;
-            const emails = bodyText.match(emailRegex) || [];
-
-            // Filter out unwanted emails
-            const goodEmail = emails.find(email => {
-                const lower = email.toLowerCase();
-                return !lower.includes('example.com') &&
-                       !lower.includes('yourdomain') &&
-                       !lower.includes('placeholder') &&
-                       !lower.startsWith('noreply') &&
-                       !lower.startsWith('no-reply') &&
-                       !lower.includes('privacy@') &&
-                       !lower.includes('abuse@');
-            });
-
-            return goodEmail || null;
-        });
-    } catch (error) {
-        console.error('Error extracting email:', error.message);
-        return null;
-    }
-}
-
-async function extractPhone(page) {
-    try {
-        return await page.evaluate(() => {
-            // Multiple phone patterns
-            const patterns = [
-                /(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,
-                /\+\d{1,3}\s?\d{1,4}\s?\d{1,4}\s?\d{1,9}/g
-            ];
-
-            const bodyText = document.body.innerText;
-            
-            for (const pattern of patterns) {
-                const phones = bodyText.match(pattern);
-                if (phones && phones.length > 0) {
-                    // Return first valid phone
-                    return phones[0].trim();
-                }
-            }
-
-            return null;
-        });
-    } catch (error) {
-        console.error('Error extracting phone:', error.message);
-        return null;
-    }
-}
-
-async function extractSocialLinks(page) {
-    try {
-        return await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a[href]'));
-            const social = {
-                linkedIn: null,
-                facebook: null,
-                twitter: null,
-                instagram: null
-            };
-
-            links.forEach(link => {
-                const href = link.href.toLowerCase();
-                if (href.includes('linkedin.com') && !social.linkedIn) {
-                    social.linkedIn = link.href;
-                } else if (href.includes('facebook.com') && !social.facebook) {
-                    social.facebook = link.href;
-                } else if ((href.includes('twitter.com') || href.includes('x.com')) && !social.twitter) {
-                    social.twitter = link.href;
-                } else if (href.includes('instagram.com') && !social.instagram) {
-                    social.instagram = link.href;
-                }
-            });
-
-            return social;
-        });
-    } catch (error) {
-        console.error('Error extracting social links:', error.message);
-        return { linkedIn: null, facebook: null, twitter: null, instagram: null };
-    }
-}
-
-async function extractLocation(page) {
-    try {
-        return await page.evaluate(() => {
-            // Look for address patterns
-            const bodyText = document.body.innerText;
-            
-            // Common location indicators
-            const locationKeywords = ['address:', 'location:', 'located in', 'based in'];
-            
-            for (const keyword of locationKeywords) {
-                const index = bodyText.toLowerCase().indexOf(keyword);
-                if (index !== -1) {
-                    // Get next 100 characters after keyword
-                    const snippet = bodyText.substring(index, index + 100);
-                    // Look for city, state/country pattern
-                    const locationMatch = snippet.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s*[A-Z]{2})/);
-                    if (locationMatch) return locationMatch[1];
-                }
-            }
-
-            // Try footer
-            const footer = document.querySelector('footer');
-            if (footer) {
-                const footerText = footer.innerText;
-                const match = footerText.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s*[A-Z]{2,})/);
-                if (match) return match[1];
-            }
-
-            return null;
-        });
-    } catch (error) {
-        console.error('Error extracting location:', error.message);
-        return null;
-    }
-}
-
-async function detectIndustry(page) {
-    try {
-        return await page.evaluate(() => {
-            const text = document.body.innerText.toLowerCase();
-            const metaDescription = document.querySelector('meta[name="description"]');
-            const fullText = text + (metaDescription ? metaDescription.content.toLowerCase() : '');
-
-            const industries = {
-                'Technology': ['software', 'saas', 'tech', 'digital', 'app', 'platform', 'cloud'],
-                'Healthcare': ['health', 'medical', 'hospital', 'clinic', 'dental', 'pharmacy'],
-                'Finance': ['finance', 'bank', 'accounting', 'insurance', 'investment'],
-                'Real Estate': ['real estate', 'property', 'realtor', 'mortgage', 'housing'],
-                'Retail': ['retail', 'shop', 'store', 'ecommerce', 'boutique'],
-                'Restaurant': ['restaurant', 'cafe', 'food', 'dining', 'catering'],
-                'Legal': ['law', 'legal', 'attorney', 'lawyer', 'firm'],
-                'Education': ['education', 'school', 'training', 'learning', 'university'],
-                'Construction': ['construction', 'builder', 'contractor', 'renovation'],
-                'Marketing': ['marketing', 'advertising', 'agency', 'branding', 'seo']
-            };
-
-            for (const [industry, keywords] of Object.entries(industries)) {
-                if (keywords.some(keyword => fullText.includes(keyword))) {
-                    return industry;
-                }
-            }
-
-            return 'Other';
-        });
-    } catch (error) {
-        console.error('Error detecting industry:', error.message);
-        return 'Unknown';
-    }
-}
-
-async function assessWebsiteQuality(page) {
-    try {
-        const metrics = await page.evaluate(() => {
-            const performance = window.performance;
-            const timing = performance.timing;
-            
-            return {
-                hasSSL: window.location.protocol === 'https:',
-                hasMobileMeta: !!document.querySelector('meta[name="viewport"]'),
-                hasLogo: !!document.querySelector('img[alt*="logo" i], img[class*="logo" i]'),
-                hasContactPage: !!document.querySelector('a[href*="contact" i]'),
-                imageCount: document.querySelectorAll('img').length,
-                hasModernDesign: !!document.querySelector('[class*="flex"], [class*="grid"]'),
-                hasSocialLinks: document.querySelectorAll('a[href*="facebook.com"], a[href*="linkedin.com"], a[href*="twitter.com"], a[href*="instagram.com"]').length > 0,
-                loadTime: timing.loadEventEnd - timing.navigationStart
-            };
-        });
-
-        let score = 0;
+        // Navigate to Google Maps search
+        const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+        console.log(`Searching: ${searchUrl}`);
         
-        if (metrics.hasSSL) score += 20;
-        if (metrics.hasMobileMeta) score += 20;
-        if (metrics.hasLogo) score += 15;
-        if (metrics.hasContactPage) score += 10;
-        if (metrics.imageCount >= 5) score += 10;
-        if (metrics.hasModernDesign) score += 15;
-        if (metrics.hasSocialLinks) score += 10;
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle2', 
+            timeout: 30000 
+        });
 
-        let rating = 'Poor';
-        let needsBranding = true;
+        // Wait for results to load
+        await page.waitForTimeout(4000);
 
-        if (score >= 70) {
-            rating = 'Good';
-            needsBranding = false;
-        } else if (score >= 40) {
-            rating = 'Average';
-            needsBranding = true;
-        }
+        // Scroll to load more results
+        await autoScroll(page);
+        await page.waitForTimeout(2000);
 
-        return {
-            score,
-            rating,
-            needsBranding
-        };
+        // Extract company data with improved selectors
+        const companies = await page.evaluate(() => {
+            const results = [];
+            const businessCards = document.querySelectorAll('[role="article"]');
+            
+            businessCards.forEach((card) => {
+                try {
+                    // Extract company name - try multiple selectors
+                    let companyName = null;
+                    const nameSelectors = [
+                        'div[font-weight="500"]',
+                        'div[font-weight="600"]',
+                        'h3',
+                        '[data-value="Directions"]',
+                        'div[class*="fontHeadline"]'
+                    ];
+                    
+                    for (const selector of nameSelectors) {
+                        const element = card.querySelector(selector);
+                        if (element && element.textContent && element.textContent.trim()) {
+                            companyName = element.textContent.trim();
+                            break;
+                        }
+                    }
+                    
+                    if (!companyName) return;
+
+                    // Extract address/location - try multiple methods
+                    let address = null;
+                    const addressSelectors = [
+                        'button[data-value="Directions"]',
+                        'span[aria-label*="Address"]',
+                        'div[class*="fontBodyMedium"]'
+                    ];
+                    
+                    for (const selector of addressSelectors) {
+                        const element = card.querySelector(selector);
+                        if (element) {
+                            const text = element.textContent || element.getAttribute('aria-label') || '';
+                            if (text.includes(',') || text.match(/\d+/)) {
+                                address = text.trim();
+                                break;
+                            }
+                        }
+                    }
+
+                    // Try to find website link in the card
+                    let website = null;
+                    const links = card.querySelectorAll('a[href]');
+                    for (const link of links) {
+                        const href = link.getAttribute('href');
+                        if (href) {
+                            // Check for website links
+                            if (href.startsWith('http://') || href.startsWith('https://')) {
+                                try {
+                                    const url = new URL(href);
+                                    const hostname = url.hostname.toLowerCase();
+                                    if (!hostname.includes('google.com') && 
+                                        !hostname.includes('maps.google') &&
+                                        !hostname.includes('gstatic.com')) {
+                                        website = hostname.replace('www.', '');
+                                        break;
+                                    }
+                                } catch (e) {
+                                    // Invalid URL, skip
+                                }
+                            }
+                            // Check for /url?q= pattern (Google redirects)
+                            else if (href.includes('/url?q=')) {
+                                try {
+                                    const urlParams = new URLSearchParams(href.split('?')[1]);
+                                    const actualUrl = urlParams.get('q');
+                                    if (actualUrl) {
+                                        const url = new URL(actualUrl);
+                                        const hostname = url.hostname.toLowerCase();
+                                        if (!hostname.includes('google.com') && 
+                                            !hostname.includes('maps.google')) {
+                                            website = hostname.replace('www.', '');
+                                            break;
+                                        }
+                                    }
+                                } catch (e) {
+                                    // Invalid URL, skip
+                                }
+                            }
+                        }
+                    }
+
+                    if (companyName && companyName.length > 1) {
+                        results.push({
+                            companyName,
+                            domain: website,
+                            location: address
+                        });
+                    }
+                } catch (error) {
+                    // Skip this card if there's an error
+                }
+            });
+
+            return results;
+        });
+
+        return companies;
     } catch (error) {
-        console.error('Error assessing website quality:', error.message);
-        return { score: 0, rating: 'Unknown', needsBranding: true };
+        console.error('Error extracting companies:', error.message);
+        return [];
     }
 }
 
-async function findDecisionMakers(page) {
+// Alternative method: Extract from search results page
+async function extractFromSearchResults(page, searchQuery) {
     try {
-        // First, look for team/about page links
-        const teamPageUrl = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
-            const teamLink = links.find(a => 
-                /team|about|leadership|management|staff|our-team/i.test(a.textContent) ||
-                /team|about|leadership|management|staff/i.test(a.href)
-            );
-            return teamLink ? teamLink.href : null;
+        // Try Google Search as alternative
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery + ' companies')}`;
+        console.log(`Trying Google Search: ${searchUrl}`);
+        
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle2', 
+            timeout: 30000 
         });
 
-        if (teamPageUrl) {
-            await page.goto(teamPageUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-        }
+        await page.waitForTimeout(2000);
 
-        return await page.evaluate(() => {
-            const titles = ['CEO', 'Founder', 'Co-Founder', 'President', 'Director', 'Owner', 'Managing Director', 'Partner'];
-            const text = document.body.innerText;
-
-            for (const title of titles) {
-                // Pattern: Name followed by title
-                const regex = new RegExp(`([A-Z][a-z]+\\s+[A-Z][a-z]+)(?:.*?)${title}`, 'i');
-                const match = text.match(regex);
+        const companies = await page.evaluate(() => {
+            const results = [];
+            
+            // Extract from search results
+            const searchResults = document.querySelectorAll('div[data-ved] h3, .g h3');
+            
+            searchResults.forEach((heading, index) => {
+                if (index >= 30) return; // Limit results
                 
-                if (match) {
-                    return {
-                        name: match[1].trim(),
-                        role: title
-                    };
+                const companyName = heading.textContent.trim();
+                const parent = heading.closest('.g') || heading.parentElement;
+                
+                if (!parent) return;
+
+                // Try to find website
+                const link = parent.querySelector('a[href]');
+                let domain = null;
+                if (link) {
+                    let href = link.getAttribute('href');
+                    
+                    // Handle Google redirect URLs
+                    if (href && href.includes('/url?q=')) {
+                        try {
+                            const urlParams = new URLSearchParams(href.split('?')[1]);
+                            href = urlParams.get('q');
+                        } catch (e) {}
+                    }
+                    
+                    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                        try {
+                            const url = new URL(href);
+                            const hostname = url.hostname.toLowerCase();
+                            // Filter out Google and social media domains
+                            if (!hostname.includes('google.com') && 
+                                !hostname.includes('youtube.com') &&
+                                !hostname.includes('facebook.com') &&
+                                !hostname.includes('linkedin.com') &&
+                                !hostname.includes('twitter.com')) {
+                                domain = hostname.replace('www.', '');
+                            }
+                        } catch (e) {
+                            // Invalid URL
+                        }
+                    }
                 }
 
-                // Reverse pattern: Title followed by name
-                const reverseRegex = new RegExp(`${title}(?:.*?)([A-Z][a-z]+\\s+[A-Z][a-z]+)`, 'i');
-                const reverseMatch = text.match(reverseRegex);
+                // Try to find location in snippet or visible text
+                const snippet = parent.querySelector('.VwiC3b, .s, .IsZvec')?.textContent || '';
+                const visibleText = parent.textContent || '';
+                const fullText = snippet + ' ' + visibleText;
                 
-                if (reverseMatch) {
-                    return {
-                        name: reverseMatch[1].trim(),
-                        role: title
-                    };
+                // Look for location patterns
+                let location = null;
+                const locationPatterns = [
+                    /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2,})/,
+                    /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z][a-z]+)/,
+                    /(located in|based in|in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i
+                ];
+                
+                for (const pattern of locationPatterns) {
+                    const match = fullText.match(pattern);
+                    if (match) {
+                        location = match[1] || match[2];
+                        break;
+                    }
                 }
-            }
 
-            return null;
+                // Include company even if domain is not found
+                if (companyName && companyName.length > 1) {
+                    results.push({
+                        companyName,
+                        domain: domain || null,
+                        location: location || null
+                    });
+                }
+            });
+
+            return results;
         });
+
+        return companies;
     } catch (error) {
-        console.error('Error finding decision makers:', error.message);
-        return null;
+        console.error('Error in search results extraction:', error.message);
+        return [];
     }
 }
 
-function calculateLeadScore(data) {
-    let score = 0;
+// Auto-scroll function to load more results
+async function autoScroll(page) {
+    await page.evaluate(async () => {
+        await new Promise((resolve) => {
+            let totalHeight = 0;
+            const distance = 500;
+            const timer = setInterval(() => {
+                const scrollHeight = document.body.scrollHeight;
+                window.scrollBy(0, distance);
+                totalHeight += distance;
 
-    // Contact information (40 points)
-    if (data.email) score += 20;
-    if (data.phone) score += 15;
-    if (data.decisionMakerName) score += 5;
+                if (totalHeight >= scrollHeight || totalHeight >= 5000) {
+                    clearInterval(timer);
+                    resolve();
+                }
+            }, 200);
+        });
+    });
+}
 
-    // Website quality indicates need (30 points)
-    if (data.websiteQualityScore !== null) {
-        if (data.websiteQualityScore < 40) {
-            score += 30; // High need for improvement
-        } else if (data.websiteQualityScore < 70) {
-            score += 20; // Medium need
-        } else {
-            score += 10; // Low need but still potential
-        }
-    }
+// Get domain from company name (fallback method)
+function extractDomainFromName(companyName) {
+    if (!companyName) return null;
+    
+    // Simple domain extraction - remove common suffixes and format
+    const cleanName = companyName
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\s+/g, '')
+        .substring(0, 30);
+    
+    // This is a fallback - real domain extraction should come from scraping
+    return null; // We'll rely on actual scraping
+}
 
-    // Social media presence (15 points)
-    if (data.linkedIn) score += 5;
-    if (data.facebook) score += 5;
-    if (data.twitter || data.instagram) score += 5;
-
-    // Complete profile (15 points)
-    if (data.industry && data.industry !== 'Unknown') score += 5;
-    if (data.location) score += 5;
-    if (data.companyName) score += 5;
-
-    return Math.min(score, 100);
+// Add randomization to get different results
+function addRandomization(query) {
+    const randomTerms = [
+        'best', 'top', 'leading', 'premier', 'reliable',
+        'established', 'professional', 'trusted', 'quality',
+        'popular', 'famous', 'well-known', 'reputable', 'successful'
+    ];
+    const randomTerm = randomTerms[Math.floor(Math.random() * randomTerms.length)];
+    
+    // Also randomize the query structure
+    const structures = [
+        `${randomTerm} ${query}`,
+        `${query} ${randomTerm}`,
+        `${query} companies`,
+        `${query} businesses`,
+        `${query} firms`
+    ];
+    
+    return structures[Math.floor(Math.random() * structures.length)];
 }
 
 // ====================
@@ -373,65 +326,104 @@ function calculateLeadScore(data) {
 
 const proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration);
 
+// Build search queries with randomization for variety
+const baseQueries = [
+    `${industry} companies in ${location}`,
+    `${industry} businesses in ${location}`,
+    `${industry} firms in ${location}`,
+    `${industry} in ${location}`,
+    `${location} ${industry} companies`
+];
+
+const allCompanies = [];
+const seenDomains = new Set();
+const seenNames = new Set();
+
+// Helper function to process and deduplicate companies
+function processCompanies(companies, location) {
+    const processed = [];
+    
+    for (const company of companies) {
+        if (allCompanies.length >= targetResults) break;
+
+        const companyName = company.companyName?.trim();
+        if (!companyName || companyName.length < 2) continue;
+        
+        const domain = company.domain?.trim() || null;
+        const companyLocation = company.location?.trim() || location;
+
+        // Skip duplicates by name (case-insensitive)
+        const nameKey = companyName.toLowerCase();
+        if (seenNames.has(nameKey)) continue;
+        
+        // Skip duplicates by domain if domain exists
+        if (domain) {
+            const domainKey = domain.toLowerCase();
+            if (seenDomains.has(domainKey)) continue;
+            seenDomains.add(domainKey);
+        }
+
+        seenNames.add(nameKey);
+
+        const companyData = createCompanyObject();
+        companyData.companyName = companyName;
+        companyData.domain = domain || 'N/A';
+        companyData.location = companyLocation;
+
+        processed.push(companyData);
+        allCompanies.push(companyData);
+    }
+    
+    return processed;
+}
+
 const crawler = new PuppeteerCrawler({
     proxyConfiguration: proxyConfig,
     
     async requestHandler({ request, page }) {
-        console.log(`Scraping: ${request.url}`);
+        console.log(`Processing: ${request.url}`);
         
-        const leadData = createLeadObject();
-        leadData.websiteUrl = request.url;
-
         try {
-            // Set timeout for page load
-            await page.goto(request.url, { 
-                waitUntil: 'networkidle2', 
-                timeout: 30000 
-            });
-
-            // Extract all data
-            leadData.companyName = await extractCompanyName(page);
-            leadData.email = await extractEmail(page);
-            leadData.phone = await extractPhone(page);
+            // Extract search query from URL
+            const urlObj = new URL(request.url);
+            let searchQuery = '';
             
-            const socialLinks = await extractSocialLinks(page);
-            leadData.linkedIn = socialLinks.linkedIn;
-            leadData.facebook = socialLinks.facebook;
-            leadData.twitter = socialLinks.twitter;
-            leadData.instagram = socialLinks.instagram;
-
-            leadData.location = await extractLocation(page);
-            leadData.industry = await detectIndustry(page);
-
-            const websiteQuality = await assessWebsiteQuality(page);
-            leadData.websiteQualityScore = websiteQuality.score;
-            leadData.websiteQualityRating = websiteQuality.rating;
-            leadData.brandingNeeds = websiteQuality.needsBranding;
-
-            // Try to find decision makers
-            const decisionMaker = await findDecisionMakers(page);
-            if (decisionMaker) {
-                leadData.decisionMakerName = decisionMaker.name;
-                leadData.decisionMakerRole = decisionMaker.role;
+            if (urlObj.hostname.includes('maps.google.com')) {
+                searchQuery = decodeURIComponent(urlObj.pathname.replace('/maps/search/', ''));
+            } else if (urlObj.hostname.includes('google.com')) {
+                searchQuery = urlObj.searchParams.get('q') || '';
+            }
+            
+            console.log(`Extracting companies for query: ${searchQuery}`);
+            
+            let companies = [];
+            
+            // Method 1: Try Google Maps first
+            if (urlObj.hostname.includes('maps.google.com')) {
+                companies = await extractCompaniesFromGoogleMaps(page, searchQuery);
+                console.log(`Found ${companies.length} companies from Google Maps`);
+            }
+            
+            // Method 2: Try Google Search (always try as backup or if Maps didn't work)
+            if (companies.length < targetResults || urlObj.hostname.includes('google.com')) {
+                console.log(`Trying Google Search for more results...`);
+                const searchCompanies = await extractFromSearchResults(page, searchQuery);
+                console.log(`Found ${searchCompanies.length} companies from Google Search`);
+                companies = [...companies, ...searchCompanies];
             }
 
-            // Calculate lead score
-            leadData.leadScore = calculateLeadScore(leadData);
-
-            // Filter by industry if specified
-            if (targetIndustry && leadData.industry !== targetIndustry) {
-                console.log(`Skipping ${request.url} - Industry mismatch`);
-                return;
-            }
-
+            // Process and save companies
+            const processed = processCompanies(companies, location);
+            
             // Save to dataset
-            await Actor.pushData(leadData);
-            console.log(`✓ Successfully scraped: ${leadData.companyName || request.url}`);
+            for (const companyData of processed) {
+                await Actor.pushData(companyData);
+            }
+
+            console.log(`Total unique companies found: ${allCompanies.length}/${targetResults}`);
 
         } catch (error) {
-            console.error(`Error scraping ${request.url}:`, error.message);
-            leadData.errors.push(error.message);
-            await Actor.pushData(leadData);
+            console.error(`Error processing ${request.url}:`, error.message);
         }
     },
 
@@ -439,13 +431,45 @@ const crawler = new PuppeteerCrawler({
         console.error(`Request ${request.url} failed:`, error.message);
     },
 
-    maxRequestsPerCrawl: maxResults,
-    maxConcurrency: 3,
-    requestHandlerTimeoutSecs: 60,
+    maxConcurrency: 1, // Single request for stability
+    requestHandlerTimeoutSecs: 90,
 });
 
-// Run the crawler
-await crawler.run(startUrls);
+// Try multiple search queries to get variety and enough results
+const searchUrls = [];
 
-console.log('Lead scraping completed!');
+// Add randomized base queries
+for (const baseQuery of baseQueries) {
+    const randomizedQuery = addRandomization(baseQuery);
+    searchUrls.push(`https://www.google.com/maps/search/${encodeURIComponent(randomizedQuery)}`);
+}
+
+// Also add some Google Search URLs for variety
+for (let i = 0; i < 2; i++) {
+    const baseQuery = baseQueries[Math.floor(Math.random() * baseQueries.length)];
+    const randomizedQuery = addRandomization(baseQuery);
+    searchUrls.push(`https://www.google.com/search?q=${encodeURIComponent(randomizedQuery)}`);
+}
+
+console.log(`\nStarting search with ${searchUrls.length} different queries for variety...\n`);
+
+// Run crawler with all search URLs
+for (const searchUrl of searchUrls) {
+    if (allCompanies.length >= targetResults) {
+        console.log(`\n✓ Reached target of ${targetResults} companies!`);
+        break;
+    }
+    
+    await crawler.run([searchUrl]);
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Small delay between searches
+}
+
+console.log(`\n✓ Company search completed!`);
+console.log(`Total companies found: ${allCompanies.length}`);
+console.log(`Target was: ${targetResults}`);
+
+if (allCompanies.length < 10) {
+    console.warn(`⚠ Warning: Only found ${allCompanies.length} companies. Minimum requirement is 10.`);
+}
+
 await Actor.exit();
