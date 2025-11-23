@@ -8,6 +8,7 @@
             "title": "Industry",
             "type": "string",
             "description": "Industry name to search for (e.g., 'Technology', 'Healthcare', 'Restaurant', 'Law Firm')",
+            "editor": "text",
             "example": "Technology",
             "default": "Technology"
         },
@@ -15,6 +16,7 @@
             "title": "Location",
             "type": "string",
             "description": "Location to search in (e.g., 'New York', 'San Francisco, CA', 'London, UK')",
+            "editor": "text",
             "example": "New York",
             "default": "New York"
         },
